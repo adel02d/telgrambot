@@ -1,0 +1,4 @@
+real_trading.db
+*.pyc
+__pycache__/
+.env
