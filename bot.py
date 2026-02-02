@@ -231,18 +231,28 @@ def cmd_bet(message):
         bot.reply_to(message, "Uso: /bet 10")
 
 # --- 6. EJECUCIÓN PRINCIPAL ---
+
+def run_telegram_bot():
+    """Ejecuta el bot de Telegram en un hilo separado"""
+    try:
+        print("🤖 Bot de Telegram iniciado en background.")
+        bot.infinity_polling(timeout=10, long_polling_timeout=5)
+    except Exception as e:
+        print(f"Error en el bot: {e}")
+
 if __name__ == '__main__':
     init_db()
     
-    # Iniciar el escáner de mercados en un hilo (background)
-    t = threading.Thread(target=scan_markets_loop)
-    t.daemon = True
-    t.start()
+    # Thread 1: Escáner de mercados en background
+    t1 = threading.Thread(target=scan_markets_loop)
+    t1.daemon = True
+    t1.start()
     
-    # Iniciar el bot de Telegram (esto bloquea el hilo principal)
-    # Nota: Usamos un timeout corto para permitir que el script maneje señales de apagado
-    try:
-        print("Bot iniciado.")
-        bot.infinity_polling(timeout=10, long_polling_timeout=5)
-    except Exception as e:
-        print(f"Error principal: {e}")
+    # Thread 2: Bot de Telegram en background
+    t2 = threading.Thread(target=run_telegram_bot)
+    t2.daemon = True
+    t2.start()
+    
+    # MAIN THREAD: Servidor Web Flask (Esto mantiene el puerto abierto para Render)
+    print("🌐 Servidor Web iniciado en puerto Render...")
+    run_flask()
