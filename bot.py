@@ -5,46 +5,39 @@ import sqlite3
 import time
 import threading
 from flask import Flask
-from datetime import datetime
 
-# --- 1. CONFIGURACIÓN (VARIABLES DE ENTORNO) ---
-# Render inyectará estas claves automáticamente
+# --- 1. CONFIGURACIÓN ---
 TOKEN_TELEGRAM = os.environ.get('TOKEN_TELEGRAM')
 API_KEY_ODDS = os.environ.get('API_KEY_ODDS')
 
-# Verificación de seguridad
 if not TOKEN_TELEGRAM or not API_KEY_ODDS:
     print("❌ ERROR: Faltan las variables de entorno TOKEN_TELEGRAM o API_KEY_ODDS.")
     exit()
 
 bot = telebot.TeleBot(TOKEN_TELEGRAM)
+bot.delete_webhook() # Limpieza inicial
 
-# --- ELIMINAR WEBHOOK (SOLUCIÓN PARA QUE EL BOT RESPONDA) ---
-# Esto limpia configuraciones antiguas que impiden que el bot reciba mensajes
-bot.delete_webhook()
-
-# --- SERVIDOR WEB (Para mantener el bot despierto en Render) ---
+# --- SERVIDOR WEB ---
 app = Flask(__name__)
 
 @app.route('/')
 def home():
-    """Render y UptimeRobot visitarán esta página para saber si estamos vivos"""
-    return "Bot de Trading Deportivo Activo 🤖 | Escaneando mercados en vivo..."
+    return "Bot Activo y Escaneando 🤖"
 
 def run_flask():
-    """Ejecuta el servidor web en el puerto que asigne Render"""
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, use_reloader=False)
 
-# --- 2. CONFIGURACIÓN API DE CUOTAS REALES ---
+# --- 2. CONFIGURACIÓN API Y DEPORTES ---
 ODDS_API_URL = "https://api.the-odds-api.com/v4/sports"
-SPORTS_TO_WATCH = ['soccer', 'basketball_euroleague', 'basketball_nba'] 
-REGIONS = 'eu' 
-MARKETS = 'h2h' 
+SPORTS_MAP = ['soccer', 'basketball_euroleague', 'basketball_nba'] 
+REGIONS = 'eu'
+MARKETS = 'h2h'
 
-# --- 3. BASE DE DATOS ---
+# --- 3. BASE DE DATOS (BLINDAJE PARA THREADING) ---
+# Importante: check_same_thread=False para evitar bloqueos entre bot y servidor web
 def init_db():
-    conn = sqlite3.connect('real_trading.db')
+    conn = sqlite3.connect('real_trading.db', check_same_thread=False)
     cursor = conn.cursor()
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS users (
@@ -57,7 +50,7 @@ def init_db():
     conn.close()
 
 def get_user(chat_id):
-    conn = sqlite3.connect('real_trading.db')
+    conn = sqlite3.connect('real_trading.db', check_same_thread=False)
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM users WHERE chat_id = ?", (str(chat_id),))
     user = cursor.fetchone()
@@ -66,7 +59,7 @@ def get_user(chat_id):
     return {'chat_id': user[0], 'balance': user[1], 'active_scan': bool(user[2])}
 
 def create_user(chat_id):
-    conn = sqlite3.connect('real_trading.db')
+    conn = sqlite3.connect('real_trading.db', check_same_thread=False)
     cursor = conn.cursor()
     try:
         cursor.execute("INSERT INTO users (chat_id) VALUES (?)", (str(chat_id),))
@@ -75,22 +68,25 @@ def create_user(chat_id):
     conn.close()
 
 def update_user_balance(chat_id, amount):
-    conn = sqlite3.connect('real_trading.db')
+    conn = sqlite3.connect('real_trading.db', check_same_thread=False)
     cursor = conn.cursor()
     cursor.execute("UPDATE users SET balance = balance + ? WHERE chat_id = ?", (amount, str(chat_id)))
     conn.commit()
     conn.close()
 
-# --- 4. LÓGICA DE ESCANEO DE MERCADO REAL ---
+def toggle_scan(chat_id, status):
+    conn = sqlite3.connect('real_trading.db', check_same_thread=False)
+    cursor = conn.cursor()
+    cursor.execute("UPDATE users SET active_scan = ? WHERE chat_id = ?", (1 if status else 0, str(chat_id)))
+    conn.commit()
+    conn.close()
 
-def fetch_real_odds():
-    """Obtiene partidos en vivo de Fútbol y Baloncesto"""
+# --- 4. LÓGICA DE ESCANEO ---
+def fetch_odds():
     all_games = []
     headers = {'Content-Type': 'application/json'}
     
-    sports_map = ['soccer', 'basketball_euroleague', 'basketball_nba'] 
-    
-    for sport in sports_map:
+    for sport in SPORTS_MAP:
         try:
             url = f"{ODDS_API_URL}/{sport}/odds-live"
             params = {
@@ -100,171 +96,104 @@ def fetch_real_odds():
                 'oddsFormat': 'decimal'
             }
             response = requests.get(url, headers=headers, params=params)
-            
             if response.status_code == 200:
-                data = response.json()
-                all_games.extend(data)
-            else:
-                print(f"⚠️ Error API {sport}: Status {response.status_code}")
+                all_games.extend(response.json())
         except Exception as e:
-            print(f"❌ Error conectando a API: {e}")
-            
+            print(f"Error API: {e}")
     return all_games
 
-def format_sport_name(sport_key):
-    if 'soccer' in sport_key: return '⚽ Fútbol'
-    if 'basketball' in sport_key: return '🏀 Baloncesto'
-    return '🏟 Deporte'
-
-def scan_markets_loop():
-    """Hilo que escanea mercados en tiempo real cada 10 MINUTOS"""
-    print("🚀 Escaneando mercados reales en vivo...")
+def scan_loop():
+    print("🚀 Escáner iniciado (cada 10 min)...")
+    notified = set()
     
-    notified_games = set()
-
     while True:
         try:
-            conn = sqlite3.connect('real_trading.db')
+            conn = sqlite3.connect('real_trading.db', check_same_thread=False)
             cursor = conn.cursor()
             cursor.execute("SELECT chat_id FROM users WHERE active_scan = 1")
-            active_users = [x[0] for x in cursor.fetchall()]
+            users = [x[0] for x in cursor.fetchall()]
             conn.close()
 
-            if active_users:
-                games = fetch_real_odds()
-                print(f"🔍 Analizando {len(games)} partidos en vivo para {len(active_users)} usuarios...")
-
-                # Si la API falló y devolvió 0, avisamos en los logs
-                if len(games) == 0:
-                    print("⚠️ No se obtuvieron partidos (posible límite de API alcanzado).")
-
+            if users:
+                games = fetch_odds()
+                print(f"🔍 Analizando {len(games)} partidos...")
+                
                 for game in games:
-                    sport_name = format_sport_name(game['sport_key'])
-                    home_team = game['home_team']
-                    away_team = game['away_team']
+                    sport = '⚽' if 'soccer' in game['sport_key'] else '🏀'
+                    home = game['home_team']
+                    away = game['away_team']
                     
-                    for bookmaker in game['bookmakers']:
-                        if 'markets' in bookmaker and len(bookmaker['markets']) > 0:
-                            outcomes = bookmaker['markets'][0]['outcomes']
-                            
-                            for outcome in outcomes:
+                    for bookmaker in game.get('bookmakers', []):
+                        for market in bookmaker.get('markets', []):
+                            for outcome in market.get('outcomes', []):
                                 price = outcome['price']
-                                
                                 if price >= 1.90:
-                                    game_id = f"{game['id']}_{bookmaker['key']}_{outcome['name']}"
-                                    
-                                    if game_id not in notified_games:
-                                        notified_games.add(game_id)
-                                        
-                                        if len(notified_games) > 1000:
-                                            notified_games.clear()
-
-                                        for uid in active_users:
-                                            send_trade_signal(uid, sport_name, home_team, away_team, outcome['name'], price, bookmaker['title'])
-            
-            else:
-                print("💤 No hay usuarios activos esperando señales.")
-
+                                    gid = f"{game['id']}_{bookmaker['key']}_{outcome['name']}"
+                                    if gid not in notified:
+                                        notified.add(gid)
+                                        if len(notified) > 500: notified.clear() # Memoria
+                                        for uid in users:
+                                            try:
+                                                bot.send_message(uid, 
+                                                    f"🔔 <b>{sport} LIVE</b>\n{home} vs {away}\n"
+                                                    f"🎯 {outcome['name']} @ {price}\n"
+                                                    f"🏢 {bookmaker['title']}", parse_mode='HTML')
+                                            except: pass
         except Exception as e:
-            print(f"⚠️ Error en bucle de escaneo: {e}")
-
-        # --- CAMBIO REALIZADO: Espera 10 minutos (600 segundos) ---
-        print("✅ Ciclo completado. Esperando 10 min para el próximo escaneo...")
+            print(f"⚠️ Error en escáner: {e}")
+        
+        print("✅ Esperando 10 minutos...")
         time.sleep(600)
 
-def send_trade_signal(chat_id, sport, home, away, selection, odds, bookie):
-    msg = (
-        f"🔔 <b>OPORTUNIDAD REAL-TIME</b>\n"
-        f"🏟 <b>{sport}</b> (En Vivo)\n"
-        f"⚔ {home} vs {away}\n\n"
-        f"🎯 <b>Apuesta:</b> {selection}\n"
-        f"💹 <b>Cuota:</b> {odds} > 1.90 ✅\n"
-        f"🏢 Casa: {bookie}\n\n"
-        f"<i>Usa /bet [monto] para registrar.</i>"
-    )
-    try:
-        bot.send_message(chat_id, msg, parse_mode='HTML')
-    except Exception as e:
-        print(f"Error enviando mensaje a {chat_id}: {e}")
-
-# --- 5. COMANDOS DE TELEGRAM ---
-
+# --- 5. COMANDOS ---
 @bot.message_handler(commands=['start'])
-def cmd_start(message):
-    create_user(message.chat.id)
-    bot.reply_to(message, "Bienvenido al Bot de Trading Real.\n\n/scan - Activar escáner\n/stop - Detener\n/balance - Ver saldo")
+def cmd_start(m):
+    create_user(m.chat.id)
+    bot.send_message(m.chat.id, "✅ Bot iniciado. Usa /scan para empezar.")
 
 @bot.message_handler(commands=['scan'])
-def cmd_scan(message):
-    create_user(message.chat.id)
-    conn = sqlite3.connect('real_trading.db')
-    cursor = conn.cursor()
-    cursor.execute("UPDATE users SET active_scan = 1 WHERE chat_id = ?", (str(message.chat.id),))
-    conn.commit()
-    conn.close()
-    bot.reply_to(message, "📡 <b>Escáner ACTIVO.</b>\nAnalizando mercados en vivo cada 10 minutos...", parse_mode='HTML')
+def cmd_scan(m):
+    create_user(m.chat.id)
+    toggle_scan(m.chat.id, True)
+    bot.send_message(m.chat.id, "📡 <b>Escáner ACTIVO.</b>\nRevisando mercados cada 10 minutos.", parse_mode='HTML')
 
 @bot.message_handler(commands=['stop'])
-def cmd_stop(message):
-    conn = sqlite3.connect('real_trading.db')
-    cursor = conn.cursor()
-    cursor.execute("UPDATE users SET active_scan = 0 WHERE chat_id = ?", (str(message.chat.id),))
-    conn.commit()
-    conn.close()
-    bot.reply_to(message, "🛑 Escáner detenido.")
+def cmd_stop(m):
+    toggle_scan(m.chat.id, False)
+    bot.send_message(m.chat.id, "🛑 Escáner apagado.")
 
 @bot.message_handler(commands=['balance'])
-def cmd_balance(message):
-    user = get_user(message.chat.id)
+def cmd_balance(m):
+    user = get_user(m.chat.id)
     if user:
-        bot.reply_to(message, f"💳 Saldo: {user['balance']:.2f}€")
+        bot.send_message(m.chat.id, f"💳 Saldo: {user['balance']:.2f}€")
+    else:
+        bot.send_message(m.chat.id, "Usa /start primero.")
 
-@bot.message_handler(commands=['deposit'])
-def cmd_deposit(message):
-    try:
-        amount = float(message.text.split()[1])
-        if amount > 0:
-            update_user_balance(message.chat.id, amount)
-            bot.reply_to(message, f"✅ Saldo actualizado (+{amount}€).")
-    except:
-        bot.reply_to(message, "Uso: /deposit 500")
-
-@bot.message_handler(commands=['bet'])
-def cmd_bet(message):
-    try:
-        amount = float(message.text.split()[1])
-        user = get_user(message.chat.id)
-        if user and amount > 0 and user['balance'] >= amount:
-            update_user_balance(message.chat.id, -amount)
-            bot.reply_to(message, f"📝 Apuesta registrada: -{amount}€.")
-        else:
-            bot.reply_to(message, "❌ Fondos insuficientes o monto inválido.")
-    except:
-        bot.reply_to(message, "Uso: /bet 10")
-
-# --- 6. EJECUCIÓN PRINCIPAL ---
+# --- 6. EJECUCIÓN (BLINDAJE ANTI-CRASH) ---
 
 def run_telegram_bot():
-    """Ejecuta el bot de Telegram en un hilo separado"""
-    try:
-        print("🤖 Bot de Telegram iniciado en background.")
-        bot.infinity_polling(timeout=10, long_polling_timeout=5)
-    except Exception as e:
-        print(f"❌ Error en el bot: {e}")
+    while True: # Bucle infinito: si se cae, se levanta solo
+        try:
+            print("🤖 Bot de Telegram iniciado.")
+            bot.infinity_polling(timeout=10, long_polling_timeout=20)
+        except Exception as e:
+            print(f"❌ Bot caído. Reiniciando en 5s... Error: {e}")
+            time.sleep(5)
 
 if __name__ == '__main__':
     init_db()
     
-    # Thread 1: Escáner de mercados en background (Cada 10 minutos)
-    t1 = threading.Thread(target=scan_markets_loop)
+    # Thread Escáner
+    t1 = threading.Thread(target=scan_loop)
     t1.daemon = True
     t1.start()
     
-    # Thread 2: Bot de Telegram en background
+    # Thread Telegram
     t2 = threading.Thread(target=run_telegram_bot)
     t2.daemon = True
     t2.start()
     
-    # MAIN THREAD: Servidor Web Flask (Esto mantiene el puerto abierto para Render)
-    print("🌐 Servidor Web iniciado en puerto Render...")
+    # Main: Flask
+    print("🌐 Servidor Web corriendo...")
     run_flask()
