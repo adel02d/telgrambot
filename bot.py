@@ -158,7 +158,7 @@ def scan_markets_loop():
             print(f"Error en bucle de escaneo: {e}")
 
         # Espera para no exceder límites de la API gratuita
-        time.sleep(60) 
+        time.sleep(600) 
 
 def send_trade_signal(chat_id, sport, home, away, selection, odds, bookie):
     msg = (
@@ -256,3 +256,4 @@ if __name__ == '__main__':
     # MAIN THREAD: Servidor Web Flask (Esto mantiene el puerto abierto para Render)
     print("🌐 Servidor Web iniciado en puerto Render...")
     run_flask()
+
