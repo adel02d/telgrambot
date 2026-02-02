@@ -12,12 +12,16 @@ from datetime import datetime
 TOKEN_TELEGRAM = os.environ.get('TOKEN_TELEGRAM')
 API_KEY_ODDS = os.environ.get('API_KEY_ODDS')
 
-# Verificación de seguridad por si olvidaste poner las claves en Render
+# Verificación de seguridad
 if not TOKEN_TELEGRAM or not API_KEY_ODDS:
     print("❌ ERROR: Faltan las variables de entorno TOKEN_TELEGRAM o API_KEY_ODDS.")
     exit()
 
 bot = telebot.TeleBot(TOKEN_TELEGRAM)
+
+# --- ELIMINAR WEBHOOK (SOLUCIÓN PARA QUE EL BOT RESPONDA) ---
+# Esto limpia configuraciones antiguas que impiden que el bot reciba mensajes
+bot.delete_webhook()
 
 # --- SERVIDOR WEB (Para mantener el bot despierto en Render) ---
 app = Flask(__name__)
@@ -101,9 +105,9 @@ def fetch_real_odds():
                 data = response.json()
                 all_games.extend(data)
             else:
-                print(f"Error API {sport}: {response.status_code}")
+                print(f"⚠️ Error API {sport}: Status {response.status_code}")
         except Exception as e:
-            print(f"Error conectando a API: {e}")
+            print(f"❌ Error conectando a API: {e}")
             
     return all_games
 
@@ -113,7 +117,7 @@ def format_sport_name(sport_key):
     return '🏟 Deporte'
 
 def scan_markets_loop():
-    """Hilo que escanea mercados en tiempo real cada 60 segundos"""
+    """Hilo que escanea mercados en tiempo real cada 10 MINUTOS"""
     print("🚀 Escaneando mercados reales en vivo...")
     
     notified_games = set()
@@ -128,7 +132,11 @@ def scan_markets_loop():
 
             if active_users:
                 games = fetch_real_odds()
-                print(f"Analizando {len(games)} partidos en vivo...")
+                print(f"🔍 Analizando {len(games)} partidos en vivo para {len(active_users)} usuarios...")
+
+                # Si la API falló y devolvió 0, avisamos en los logs
+                if len(games) == 0:
+                    print("⚠️ No se obtuvieron partidos (posible límite de API alcanzado).")
 
                 for game in games:
                     sport_name = format_sport_name(game['sport_key'])
@@ -154,11 +162,15 @@ def scan_markets_loop():
                                         for uid in active_users:
                                             send_trade_signal(uid, sport_name, home_team, away_team, outcome['name'], price, bookmaker['title'])
             
-        except Exception as e:
-            print(f"Error en bucle de escaneo: {e}")
+            else:
+                print("💤 No hay usuarios activos esperando señales.")
 
-        # Espera para no exceder límites de la API gratuita
-        time.sleep(600) 
+        except Exception as e:
+            print(f"⚠️ Error en bucle de escaneo: {e}")
+
+        # --- CAMBIO REALIZADO: Espera 10 minutos (600 segundos) ---
+        print("✅ Ciclo completado. Esperando 10 min para el próximo escaneo...")
+        time.sleep(600)
 
 def send_trade_signal(chat_id, sport, home, away, selection, odds, bookie):
     msg = (
@@ -173,7 +185,7 @@ def send_trade_signal(chat_id, sport, home, away, selection, odds, bookie):
     try:
         bot.send_message(chat_id, msg, parse_mode='HTML')
     except Exception as e:
-        pass
+        print(f"Error enviando mensaje a {chat_id}: {e}")
 
 # --- 5. COMANDOS DE TELEGRAM ---
 
@@ -190,7 +202,7 @@ def cmd_scan(message):
     cursor.execute("UPDATE users SET active_scan = 1 WHERE chat_id = ?", (str(message.chat.id),))
     conn.commit()
     conn.close()
-    bot.reply_to(message, "📡 <b>Escáner ACTIVO.</b>\nAnalizando mercados en vivo...", parse_mode='HTML')
+    bot.reply_to(message, "📡 <b>Escáner ACTIVO.</b>\nAnalizando mercados en vivo cada 10 minutos...", parse_mode='HTML')
 
 @bot.message_handler(commands=['stop'])
 def cmd_stop(message):
@@ -238,12 +250,12 @@ def run_telegram_bot():
         print("🤖 Bot de Telegram iniciado en background.")
         bot.infinity_polling(timeout=10, long_polling_timeout=5)
     except Exception as e:
-        print(f"Error en el bot: {e}")
+        print(f"❌ Error en el bot: {e}")
 
 if __name__ == '__main__':
     init_db()
     
-    # Thread 1: Escáner de mercados en background
+    # Thread 1: Escáner de mercados en background (Cada 10 minutos)
     t1 = threading.Thread(target=scan_markets_loop)
     t1.daemon = True
     t1.start()
@@ -256,4 +268,3 @@ if __name__ == '__main__':
     # MAIN THREAD: Servidor Web Flask (Esto mantiene el puerto abierto para Render)
     print("🌐 Servidor Web iniciado en puerto Render...")
     run_flask()
-
