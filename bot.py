@@ -6,8 +6,8 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
 # --- CONFIGURACION ---
-TELEGRAM_TOKEN = 'TU_TOKEN_TELEGRAM_AQUI' 
-ODDS_API_KEY = 'TU_API_KEY_DE_CUOTAS_AQUI' 
+TELEGRAM_TOKEN = '8433283610:AAH8Tu8Ns28JSZ5Ba-XR9IKfrDxyQrwctYA' 
+ODDS_API_KEY = 'b47f2a8ca5a4c7b1ab48a517f48782e9' 
 
 DATA_FILE = 'bot_data.json'
 
