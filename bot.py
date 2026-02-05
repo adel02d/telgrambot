@@ -2,12 +2,14 @@ import logging
 import json
 import os
 import requests
+import threading
+from flask import Flask
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
 # --- CONFIGURACION ---
-TELEGRAM_TOKEN = '8433283610:AAH8Tu8Ns28JSZ5Ba-XR9IKfrDxyQrwctYA' 
-ODDS_API_KEY = 'b47f2a8ca5a4c7b1ab48a517f48782e9' 
+TELEGRAM_TOKEN = 'TU_TOKEN_TELEGRAM_AQUI' # <--- PON TU TOKEN AQUÍ
+ODDS_API_KEY = 'TU_API_KEY_DE_CUOTAS_AQUI' # <--- PON TU API KEY AQUÍ
 
 DATA_FILE = 'bot_data.json'
 
@@ -309,15 +311,39 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif 'accept_bet' in data or 'reject_bet' in data:
         await handle_signal_response(update, context)
 
+# --- CODIGO PARA MANTENER EL WEB SERVICE VIVO (TRUCO FLASK) ---
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "Bot is alive!"
+
+def run_flask():
+    # Render asigna el puerto automaticamente via variable de entorno
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host='0.0.0.0', port=port)
+
+# --- MAIN ---
 def main():
     if 'TU_TOKEN_TELEGRAM_AQUI' in TELEGRAM_TOKEN or 'TU_API_KEY_DE_CUOTAS_AQUI' in ODDS_API_KEY:
         print("ERROR: Pon tus TOKENS reales en el codigo.")
         return
+
+    # Crear la aplicacion de Telegram
     application = Application.builder().token(TELEGRAM_TOKEN).build()
+    
+    # Handlers
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CallbackQueryHandler(button_handler))
-    print("Bot iniciado.")
-    application.run_polling()
+    
+    print("Iniciando Bot y Web Server...")
+    
+    # 1. Iniciar el Bot de Telegram en un hilo (Thread) separado
+    t = threading.Thread(target=application.run_polling)
+    t.start()
+    
+    # 2. Iniciar el servidor web Flask (Esto mantiene el servicio activo en Render)
+    run_flask()
 
 if __name__ == '__main__':
     main()
