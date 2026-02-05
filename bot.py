@@ -1,15 +1,15 @@
+import os
 import logging
 import json
-import os
-import requests
 import threading
+import requests
 from flask import Flask
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
-# --- CONFIGURACION ---
-TELEGRAM_TOKEN = 'TU_TOKEN_TELEGRAM_AQUI' # <--- PON TU TOKEN AQUÍ
-ODDS_API_KEY = 'TU_API_KEY_DE_CUOTAS_AQUI' # <--- PON TU API KEY AQUÍ
+# --- CONFIGURACION (LECTURA DESDE VARIABLES DE ENTORNO DE RENDER) ---
+TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
+ODDS_API_KEY = os.getenv('ODDS_API_KEY')
 
 DATA_FILE = 'bot_data.json'
 
@@ -319,14 +319,15 @@ def home():
     return "Bot is alive!"
 
 def run_flask():
-    # Render asigna el puerto automaticamente via variable de entorno
+    # Render asigna el puerto automaticamente via variable de entorno PORT
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
 
 # --- MAIN ---
 def main():
-    if 'TU_TOKEN_TELEGRAM_AQUI' in TELEGRAM_TOKEN or 'TU_API_KEY_DE_CUOTAS_AQUI' in ODDS_API_KEY:
-        print("ERROR: Pon tus TOKENS reales en el codigo.")
+    # Verifica que las variables de entorno existan (Desde Render)
+    if not TELEGRAM_TOKEN or not ODDS_API_KEY:
+        print("ERROR: Faltan las variables de entorno en Render (TELEGRAM_TOKEN u ODDS_API_KEY).")
         return
 
     # Crear la aplicacion de Telegram
